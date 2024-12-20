@@ -1,0 +1,10 @@
+telethon==1.30.0         # Librería principal para interacción con Telegram
+requests>=2.25.0         # Para hacer solicitudes HTTP
+selenium==4.12.0         # Para control del navegador
+faker==18.9.0            # Para generar datos falsos (direcciones, nombres, etc.)
+pytz>=2021.1             # Manejo de zonas horarias
+schedule>=1.1.0          # Tareas programadas
+python-dotenv>=1.0.0     # Manejo de variables de entorno
+beautifulsoup4>=4.9.3    # Scraping de HTML
+lxml>=4.6.3              # Parser para HTML y XML
+async-timeout>=4.0.0     # Manejo de tiempos de espera en operaciones async
