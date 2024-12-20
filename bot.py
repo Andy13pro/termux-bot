@@ -239,9 +239,14 @@ import shutil
 @client.on(events.NewMessage(from_users=list(bots_usernames.values())))
 async def forward_response(event):
     """
-    Procesa las respuestas de los bots, descargando archivos, procesando texto,
-    y reenviando mensajes a los chats originales.
+    Procesa las respuestas de los bots y maneja las condiciones de envío.
     """
+    # Captura respuestas rápidas de 'rave'
+    if event.sender_id == bots_usernames['rave']:
+        global rave_responses
+        rave_responses.append(event.message)
+
+    # Obtener los datos del mensaje original
     original_message_data = original_messages.get(event.message.reply_to_msg_id)
     if not original_message_data:
         return
@@ -250,209 +255,104 @@ async def forward_response(event):
     original_id = original_message_data['original_id']
     command_used = original_message_data['command'].split()[0]
 
-    # Ruta de descarga específica para Termux
-    download_path = "/data/data/com.termux/files/home/downloads"
-
-    # Crear el directorio de descargas si no existe
-    if not os.path.exists(download_path):
-        try:
-            os.makedirs(download_path)
-            print(f"Directorio creado: {download_path}")
-        except Exception as e:
-            print(f"Error creando el directorio: {e}")
-            await client.send_message(destination_chat_id, "⚠️ Error al preparar el sistema de descargas. Inténtalo más tarde.", reply_to=original_id)
-            return
-
-    media_path = None  # Inicializar variable para manejo del archivo descargado
-
-    try:
-        if event.message.media:
-            # Verificar el tamaño del archivo antes de descargar
-            if event.message.file.size > 10 * 1024 * 1024:  # Límite de 10 MB
-                await client.send_message(destination_chat_id, "⚠️ El archivo es demasiado grande para procesarlo.", reply_to=original_id)
-                return
-
-            # Descargar el archivo con un nombre único
-            media_path = await event.message.download_media(file=os.path.join(download_path, f"{event.message.id}_media"))
-            if media_path:
-                print(f"Archivo descargado en: {media_path}")
-                # Enviar el archivo descargado
-                await client.send_file(destination_chat_id, media_path, reply_to=original_id)
-        else:
-            # Procesar y enviar el texto si no hay medios adjuntos
-            texto_procesado = procesar_respuesta_generica(event.message.text, command_used)
-            await client.send_message(destination_chat_id, texto_procesado, reply_to=original_id)
-
-    except Exception as e:
-        print(f"Error reenviando el mensaje: {e}")
-        await client.send_message(destination_chat_id, "⚠️ Ocurrió un error al procesar tu mensaje. Por favor, intenta nuevamente.", reply_to=original_id)
-
-    finally:
-        # Eliminar el archivo descargado para liberar espacio
-        if media_path and os.path.exists(media_path):
-            try:
-                os.remove(media_path)
-                print(f"Archivo eliminado: {media_path}")
-            except OSError as e:
-                print(f"Error eliminando el archivo {media_path}: {e}")
-
-    # Limpiar la lista de respuestas para la siguiente iteración
-    rave_responses.clear()
-
-
-
-# Lista de comandos que permiten enviar texto junto con la imagen/media
-comandos_excluidos = ['/dnifd']  # Añadir comandos que deben enviar media junto con texto
-
-# Lista de comandos que solo deben enviar texto, sin imágenes o medios
-comandos_solo_texto = ['/sbs', '/comando2']  # Comandos que solo enviarán texto
-
-@client.on(events.NewMessage(from_users=list(bots_usernames.values())))
-async def forward_response(event):
-    # Captura respuestas rápidas de 'rave' después de esperar los 3 segundos
-    if event.sender_id == bots_usernames['rave']:
-        global rave_responses
-        rave_responses.append(event.message)  # Almacenar la respuesta en la cola
-
-    original_message_data = original_messages.get(event.message.reply_to_msg_id)
-    if not original_message_data:
-        return
-
-    destination_chat_id = original_message_data['original_chat_id']
-    original_id = original_message_data['original_id']
-    command_used = original_message_data['command'].split()[0]  # Extraer el comando
-
-    # Verificar si se debe enviar solo texto debido a la configuración de /dni
+    # Verificar si el mensaje debe enviar solo texto
     if original_message_data.get('send_only_text', False):
-        # Procesar el texto de la respuesta
         texto_procesado = procesar_respuesta_generica(event.message.text, command_used)
         await client.send_message(destination_chat_id, texto_procesado, reply_to=original_id)
         print(f"Respuesta de solo texto enviada para {command_used}.")
-        return  # Salir de la función ya que no se enviarán imágenes
+        return
 
-    # Determinar si se debe enviar solo imágenes debido a que el comando original era /rhf
+    # Verificar si debe enviar solo imágenes
     enviar_solo_imagenes = original_message_data.get('send_only_images', False)
-    
+
     try:
-        # Manejo de anti-spam y reintentos basado en palabras clave
+        # Manejo de reintentos si se detectan mensajes de anti-spam
         if any(palabra in event.message.text for palabra in palabras_clave_reintentos):
             original_message_data['retries'] += 1
-
-            if original_message_data['retries'] <= 2:  # Máximo de 2 reintentos
-                await asyncio.sleep(5)  # Espera de 5 segundos
+            if original_message_data['retries'] <= 2:
+                await asyncio.sleep(5)
                 print("Reintentando enviar el comando...")
                 try:
                     await client.send_message(event.sender_id, original_message_data['command'])
                 except Exception as e:
                     print(f"Error reenviando el comando: {e}")
             else:
-                await client.send_message(destination_chat_id, "⚠️ Se ha alcanzado el máximo de reintentos debido a las restricciones.", reply_to=original_id)
-        else:
-            # Manejo de mensajes con "Cargando..."
-            if "Cargando...." in event.message.text:
-                await client.send_message(destination_chat_id, event.message.text, reply_to=original_id)
-                print(f"Texto enviado sin imagen: {event.message.text}")
-            else:
-                # Procesamiento para comandos específicos
-                if command_used in ['/dnif', '/dni', '/sunarp', '/telp', '/tel', '/tra', '/sueldos', '/denuncias', '/bitel', '/claro', '/nm', '/pla', '/ag', '/mpfn', '/bitel', '/co', '/sueldos', '/tra']:
-                    # Procesar el texto de la respuesta si no es un comando marcado para solo imagen
-                    texto_procesado = procesar_respuesta_generica(event.message.text, command_used) if not enviar_solo_imagenes else ""
+                await client.send_message(destination_chat_id, "⚠️ Se ha alcanzado el máximo de reintentos.", reply_to=original_id)
+            return
 
-                    if event.message.media:  # Verificar si hay media adjunta
-                        # Descargar el archivo adjunto
-                        media_path = await event.message.download_media()
+        # Manejo de mensajes con "Cargando..."
+        if "Cargando...." in event.message.text:
+            await client.send_message(destination_chat_id, event.message.text, reply_to=original_id)
+            print(f"Texto enviado sin imagen: {event.message.text}")
+            return
 
-                        # Guardar los archivos adjuntos en una lista
-                        media_files = [media_path]
+        # Procesar comandos específicos
+        if command_used in ['/dnif', '/dni', '/sunarp', '/telp', '/tel', '/tra', '/sueldos', '/denuncias', '/bitel', '/claro', '/nm', '/pla', '/ag', '/mpfn', '/co']:
+            texto_procesado = procesar_respuesta_generica(event.message.text, command_used) if not enviar_solo_imagenes else ""
 
-                        # Enviar los archivos adjuntos sin texto si se debe enviar solo imágenes
-                        await client.send_file(
-                            destination_chat_id,
-                            media_files,  # Enviar los archivos adjuntos (imagen/PDF)
-                            reply_to=original_id  # Responder al mensaje original
-                        )
-                        print(f"Imágenes/archivos adjuntos enviados juntos para {command_used}: {media_files}")
-                        
-                        # Eliminar los archivos descargados para liberar espacio
-                        for file in media_files:
-                            if os.path.exists(file):
-                                os.remove(file)
-                                print(f"Archivo adjunto eliminado: {file}")
-                    
-                    else:
-                        # Enviar el texto procesado si no hay media y no está marcado para solo imagen
-                        if not enviar_solo_imagenes:
-                            await client.send_message(destination_chat_id, texto_procesado, reply_to=original_id)
-                            print(f"Respuesta de {command_used} enviada solo con texto procesado.")
+            if event.message.media:
+                media_path = await event.message.download_media()
 
-                # Verificar si el comando está en la lista de "solo texto"
-                elif command_used in comandos_solo_texto:
-                    await client.send_message(destination_chat_id, event.message.text, reply_to=original_id)
-                    print(f"Respuesta de solo texto enviada al usuario: {event.message.text}")
-                
-                elif event.message.media:
-                    # Manejo para archivos PDF e imágenes
-                    if event.message.file and event.message.file.mime_type == 'application/pdf':
-                        pdf_path = await event.message.download_media()
-                        if not os.path.exists(pdf_path):
-                            print(f"Error: El archivo PDF no existe en la ruta: {pdf_path}")
-                            return
-                        pdf_procesado_path = fantasma.procesar_pdf_y_eliminar_logo(pdf_path)
-
-                        try:
-                            # Ruta completa del archivo portada.png
-                            imagen_portada_path = os.path.join(os.getcwd(), "portada.png")
-
-                            # Verifica que el archivo de portada exista y sea accesible
-                            if not os.path.isfile(imagen_portada_path):
-                                print(f"Error: La miniatura no se encontró en la ruta: {imagen_portada_path}")
-                            else:
-                                # Verificar tamaño y formato de la imagen (debe ser PNG o JPEG y menor de 200 KB)
-                                with Image.open(imagen_portada_path) as img:
-                                    if img.format not in ['PNG', 'JPEG']:
-                                        print("Error: La miniatura debe estar en formato PNG o JPEG")
-                                    else:
-                                        # Redimensionar la imagen si es necesario
-                                        img.thumbnail((90, 90))
-                                        # Guardar la imagen de nuevo para asegurarnos de que cumple con los requisitos de tamaño
-                                        img.save(imagen_portada_path)
-
-                                        # Enviar solo el archivo PDF con la miniatura asignada
-                                        await client.send_file(
-                                            destination_chat_id,
-                                            file=pdf_procesado_path,
-                                            thumb=imagen_portada_path,  # Especificar la miniatura
-                                            reply_to=original_id
-                                        )
-                                        print(f"Solo PDF enviado sin texto adjunto para {command_used}: {pdf_procesado_path}")
-
-                        except Exception as e:
-                            print(f"Error al enviar el PDF con portada: {e}")
-
-                        finally:
-                            # Eliminar los archivos descargados después de ser enviados
-                            if os.path.exists(pdf_path):
-                                os.remove(pdf_path)
-                                print(f"Archivo PDF original eliminado: {pdf_path}")
-                            if os.path.exists(pdf_procesado_path):
-                                os.remove(pdf_procesado_path)
-                                print(f"Archivo PDF procesado eliminado: {pdf_procesado_path}")
-                    else:
-                        # Enviar solo otros medios (sin texto)
-                        await client.send_file(
-                            destination_chat_id,
-                            event.message.media,
-                            reply_to=original_id
-                        )
-                        print(f"Solo media (imagen/PDF) enviada para {command_used}, sin texto.")
+                if enviar_solo_imagenes:
+                    await client.send_file(destination_chat_id, media_path, reply_to=original_id)
+                    print(f"Solo imagen enviada para {command_used}: {media_path}")
                 else:
-                    await client.send_message(destination_chat_id, event.message.text, reply_to=original_id)
-                    print(f"Respuesta de solo texto enviada al usuario: {event.message.text}")
+                    await client.send_message(destination_chat_id, texto_procesado, reply_to=original_id)
+                    await client.send_file(destination_chat_id, media_path, reply_to=original_id)
+                    print(f"Texto e imagen enviados para {command_used}: {media_path}")
+
+                if os.path.exists(media_path):
+                    os.remove(media_path)
+                    print(f"Archivo eliminado: {media_path}")
+
+            else:
+                await client.send_message(destination_chat_id, texto_procesado, reply_to=original_id)
+                print(f"Solo texto enviado para {command_used}.")
+
+        elif event.message.media:
+            # Manejo de archivos PDF o imágenes
+            if event.message.file and event.message.file.mime_type == 'application/pdf':
+                pdf_path = await event.message.download_media()
+                pdf_procesado_path = fantasma.procesar_pdf_y_eliminar_logo(pdf_path)
+
+                try:
+                    imagen_portada_path = os.path.join(os.getcwd(), "portada.png")
+                    if os.path.isfile(imagen_portada_path):
+                        with Image.open(imagen_portada_path) as img:
+                            img.thumbnail((90, 90))
+                            img.save(imagen_portada_path)
+
+                        await client.send_file(destination_chat_id, file=pdf_procesado_path, thumb=imagen_portada_path, reply_to=original_id)
+                        print(f"PDF enviado con portada: {pdf_procesado_path}")
+
+                    else:
+                        await client.send_file(destination_chat_id, file=pdf_procesado_path, reply_to=original_id)
+                        print(f"PDF enviado sin portada: {pdf_procesado_path}")
+
+                finally:
+                    if os.path.exists(pdf_path):
+                        os.remove(pdf_path)
+                        print(f"Archivo PDF original eliminado: {pdf_path}")
+                    if os.path.exists(pdf_procesado_path):
+                        os.remove(pdf_procesado_path)
+                        print(f"Archivo PDF procesado eliminado: {pdf_procesado_path}")
+
+            else:
+                media_path = await event.message.download_media()
+                await client.send_file(destination_chat_id, media_path, reply_to=original_id)
+                print(f"Media enviada: {media_path}")
+                if os.path.exists(media_path):
+                    os.remove(media_path)
+
+        else:
+            await client.send_message(destination_chat_id, event.message.text, reply_to=original_id)
+            print(f"Solo texto enviado al usuario.")
 
     except telethon.errors.rpcerrorlist.MessageDeleteForbiddenError:
         print("El mensaje fue eliminado y no se pudo reenviar.")
     except Exception as e:
         print(f"Error reenviando el mensaje: {e}")
+
 
 
 
